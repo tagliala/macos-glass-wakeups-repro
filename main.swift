@@ -11,6 +11,9 @@
 //   --activate      activate the app before showing the panel
 //   --borderless    borderless, transparent panel at status bar level
 //   --below-item    place the panel right below the status item
+//   --text-field    add a SwiftUI TextField to the content
+//   --resign        before closing, clear the panel's first responder
+//   --orderfront    show with orderFront instead of makeKeyAndOrderFront
 //   --under-mouse   place the panel under the mouse cursor
 
 import AppKit
@@ -43,10 +46,14 @@ func say(_ line: String) {
 struct HelloView: View {
     let glass: Bool
     var container = false
+    @State private var name = ""
 
     var body: some View {
         let content = VStack(spacing: 12) {
             Text("Hello")
+            if flag("--text-field") {
+                TextField("Name", text: $name).frame(width: 180)
+            }
             Button("Press me") {}
         }
         .padding(24)
@@ -197,10 +204,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let m = NSEvent.mouseLocation
             panel.setFrameOrigin(NSPoint(x: m.x - 120, y: m.y - 70))
         }
-        panel.makeKeyAndOrderFront(nil)
+        if flag("--orderfront") { panel.orderFront(nil) } else { panel.makeKeyAndOrderFront(nil) }
     }
 
     func hide() {
+        if flag("--resign") { panel.makeFirstResponder(nil) }
         if let popover { popover.performClose(nil) } else { panel.orderOut(nil) }
     }
 

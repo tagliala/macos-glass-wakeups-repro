@@ -1,143 +1,143 @@
-# Periodic idle wakeups after closing a popover on macOS 27
+# Periodic idle wakeups after closing glass UI with a text field on macOS 27
 
-A small accessory (menu bar) app that shows some content once, closes it, and
-then stays idle. A System Trace of the idle process shows whether it keeps
-waking up.
+This is a small accessory (menu bar) app. It shows a panel or popover once, closes it, and then sits idle. A System Trace of the idle process shows whether it keeps waking up.
 
-Starting point: in a larger app, an `NSPanel` whose content is Liquid Glass
-(`NSGlassEffectView`, or SwiftUI `.glassEffect`) kept waking two libdispatch
-worker threads about every 3.0 s after the panel had been shown once and
-closed with `orderOut`. This repository tries to reproduce that with nothing
-else in the process.
+**Result in short.** The process keeps waking about every 3.0 s after the UI has closed in two cases:
 
-**Result in short:** the `NSPanel` + glass case did **not** reproduce here.
-An `NSPopover` shown from the status item **does** produce a steady ~3.0 s
-wakeup after it is closed, with or without `.glassEffect` in its content, and
-the timer keeps running after the popover, its view controller and its view
-have been deallocated.
+- an `NSPanel` holding the Liquid Glass material (`NSGlassEffectView` or SwiftUI `.glassEffect`) **together with a SwiftUI `TextField`**, after it has been shown once and closed with `orderOut`;
+- an `NSPopover` shown from the status item. Its content can be plain SwiftUI, SwiftUI with `.glassEffect`, or plain SwiftUI with a `TextField`: all three were measured, and all three wake.
 
-Tested on macOS 27.0.1 (build 26A434), arm64, Swift 6.4 (`swiftc -O`).
+Without the glass, the text field causes no periodic wake. Without the text field, the glass panel causes none either.
+
+The script measures only when the process runs. The following details come from reading the traces by hand: each wake runs two libdispatch worker threads for a few microseconds. "Keeps waking" means the wakes continued for the whole trace: 20 s in the table below, and 60 s in one longer run (see Results).
+
+Tested on macOS 27.0.1 (build 26A434), arm64, Swift 6.4 (`swiftc -O`). No other macOS version was tested.
 
 ## Build and run
 
 ```sh
 swiftc -O main.swift -o glass-wakeups
-./measure.sh popover-plain          # one mode
-./measure-all.sh                    # every mode twice, prints a table
+./measure.sh appkit-glass --text-field   # one case
+./measure-all.sh                         # every case twice, then a table
 ```
 
-`measure.sh <mode> [flags]` starts `./glass-wakeups --mode <mode> --auto`,
-which shows the content 3 s after launch and closes it 3 s later (no UI
-scripting, no accessibility permission). Five seconds after the app prints
-`done`, it records a 14 s `System Trace` attached to the pid, exports the
-`thread-state` table, takes the start of every `Running` interval of the
-process, groups starts within 50 ms into one wake, and prints the wake
-times, the intervals and a verdict:
+`measure.sh <mode> [flags]` does the following:
 
-- `periodic ~Xs`: at least 3 wakes are followed by another wake X s later
-  (within 3 %), so unrelated extra wakes do not hide a timer;
-- `quiet`: at most one wake (the trace attach itself usually causes one);
+1. It starts `./glass-wakeups --mode <mode> --auto`. The app shows the UI 3 s after launch and closes it 3 s later, so no UI scripting or accessibility permission is needed.
+2. Five seconds after the app prints `done`, it records a 20 s `System Trace` attached to the app's pid. Set `TRACE_SECONDS` to change the length.
+3. It exports the `thread-state` table and takes the start of every `Running` interval of the process. Starts within 50 ms of each other count as one wake.
+4. It prints the wake times, the intervals and a verdict.
+
+The verdicts are:
+
+- `periodic ~Xs`: there is a chain of at least 4 wakes, each 0.85 to 1.15 times X after the previous one. Extra unrelated wakes do not break the chain. The timer's leeway is tolerated: its first beats land a few hundred ms early or late, as in 2.8, 3.2, 3.0, 3.0 s.
+- `quiet`: at most two wakes. Attaching the trace causes one wake near the start (about 5 s in), and stopping it causes one near the end (about 19 s in).
 - `irregular`: anything else.
 
-`top` is not reliable for this: it can report 0 idle wakeups while the trace
-shows them.
+`top` is not reliable for this. It can report 0 idle wakeups while the trace shows them.
 
-## Modes
+## Modes and flags
 
-| mode | what is shown |
-|------|---------------|
-| `never-open` | control: nothing is ever shown (same timing as the others) |
-| `no-content` | the `NSPanel`, empty |
+| mode | content |
+|------|---------|
+| `never-open` | control: nothing is ever shown, with the same timing as the other modes |
+| `no-content` | an empty `NSPanel` |
 | `plain` | the panel with a SwiftUI view (a `Text` and a `Button`), no glass |
-| `appkit-glass` | the panel, content view = `NSGlassEffectView` wrapping the hosting view |
-| `swiftui-glass` | the panel, SwiftUI `.glassEffect(.regular, in: .rect(cornerRadius: 12))` |
-| `appkit-glass-clear` | as `appkit-glass`, `style = .clear` |
-| `appkit-glass-container` | `NSGlassEffectContainerView` around the glass view |
-| `swiftui-glass-container` | SwiftUI `GlassEffectContainer` around `.glassEffect` |
-| `visual-effect` | `NSVisualEffectView` (`.popover` material) instead of glass |
-| `popover-glass` | `NSPopover` from the status item, SwiftUI content with `.glassEffect` |
-| `popover-plain` | `NSPopover` from the status item, SwiftUI content without `.glassEffect` |
-| `popover-teardown` | as `popover-glass`; after closing, `contentViewController = nil`, the popover is released, and weak references prove that popover, controller and view are deallocated |
-| `control-timer` | positive control: the app's own 3 s `DispatchSourceTimer`, nothing shown |
+| `appkit-glass` | the panel; its content view is an `NSGlassEffectView` wrapping the hosting view |
+| `swiftui-glass` | the panel with `.glassEffect(.regular, in: .rect(cornerRadius: 12))`, no AppKit glass view |
+| `appkit-glass-clear` | as `appkit-glass`, with `style = .clear` |
+| `appkit-glass-container` | an `NSGlassEffectContainerView` around the glass view |
+| `swiftui-glass-container` | a SwiftUI `GlassEffectContainer` around `.glassEffect` |
+| `visual-effect` | an `NSVisualEffectView` (`.popover` material) instead of glass |
+| `popover-glass` | an `NSPopover` from the status item; its SwiftUI content uses `.glassEffect` |
+| `popover-plain` | the same popover; its content has no `.glassEffect` and no text field |
+| `popover-teardown` | as `popover-glass`; after closing, the app sets `contentViewController = nil` and releases the popover. Weak references then show that the popover, its controller and its view were deallocated. |
+| `control-timer` | positive control: the app's own 3 s `DispatchSourceTimer`, with nothing shown |
 
-Flags (with any mode): `--twice` (a second show/close cycle 3 s after the
-first; with `popover-teardown` the popover is recreated from scratch),
-`--click` (show through the status item button's `performClick`),
-`--activate` (activate the app first), `--borderless` (borderless,
-transparent panel at status bar level), `--below-item` (panel right below the
-status item), `--under-mouse` (panel under the cursor).
+These flags work with any mode:
+
+| flag | effect |
+|------|--------|
+| `--text-field` | adds a SwiftUI `TextField` to the content |
+| `--resign` | clears the panel's first responder before closing |
+| `--orderfront` | shows the panel with `orderFront` instead of `makeKeyAndOrderFront` |
+| `--twice` | runs a second show/close cycle 3 s after the first; with `popover-teardown`, the second popover is built from scratch |
+| `--click` | shows the UI through the status item button's `performClick` |
+| `--activate` | activates the app first |
+| `--borderless` | makes the panel borderless, transparent and at status bar level |
+| `--below-item` | places the panel right below the status item |
+| `--under-mouse` | places the panel under the cursor |
 
 ## Results
 
-Each case was run twice with `./measure-all.sh` on an idle machine (no
-interaction during the runs).
+Every case was run twice with `./measure-all.sh` on an idle machine. Times are in seconds from the start of the trace.
 
 | case | run 1 | run 2 |
 |------|-------|-------|
 | never-open | quiet | quiet |
-| no-content | irregular (2 wakes, 7.0 s apart) | quiet |
-| plain | quiet | irregular (2 wakes, 5.1 s) |
-| appkit-glass | quiet | irregular (2 wakes, 5.5 s) |
-| swiftui-glass | quiet | quiet |
-| appkit-glass-clear | quiet | irregular (2 wakes, 5.1 s) |
-| appkit-glass-container | irregular (2 wakes, 5.1 s) | irregular (2 wakes, 6.2 s) |
-| swiftui-glass-container | irregular (3 wakes, 5.5 s, 1.4 s) | quiet |
-| visual-effect | quiet | irregular (2 wakes, 5.2 s) |
-| **popover-glass** | **periodic ~3.0 s** | **periodic ~3.0 s** |
-| **popover-plain** | **periodic ~3.0 s** (3.03 3.00 3.00 3.00) | **periodic ~3.0 s** (3.02 3.00 3.00 3.00) |
-| **popover-teardown** (all deallocated) | **periodic ~3.0 s** | **periodic ~3.0 s** |
-| popover-glass --twice | periodic ~3.0 s | periodic ~3.0 s |
-| popover-teardown --twice (all deallocated, twice) | 3 s grid, one beat 0.2 s early (detector: irregular) | same |
-| control-timer | periodic ~3.0 s (3.000 3.001 3.000) | periodic ~3.0 s |
-| appkit-glass --twice | irregular (4 wakes, no 3 s pattern) | irregular (8 wakes, no 3 s pattern) |
+| no-content | quiet | quiet |
+| plain | quiet | quiet |
+| appkit-glass | quiet | quiet |
+| swiftui-glass | irregular (3 wakes) | quiet |
+| appkit-glass-clear | irregular (3 wakes) | irregular (4 wakes) |
+| appkit-glass-container | quiet | irregular (5 wakes) |
+| swiftui-glass-container | irregular (3 wakes) | irregular (3 wakes) |
+| visual-effect | quiet | quiet |
+| plain --text-field | quiet | quiet |
+| visual-effect --text-field | periodic ~3.7 (4 of 9 wakes, see below) | quiet |
+| **appkit-glass --text-field** | **periodic ~3.0** (1.23 4.06 7.27 10.27 13.26 16.23 19.03) | **periodic ~3.0** (6 of 12 wakes) |
+| **swiftui-glass --text-field** | **periodic ~3.0** (7 of 7 wakes) | **periodic ~3.0** (4 of 8 wakes) |
+| **appkit-glass --text-field --resign** | **periodic ~3.0** | **periodic ~3.0** |
+| **appkit-glass --text-field --orderfront** | **periodic ~3.0** | **periodic ~3.0** |
+| **popover-glass** | **periodic ~3.0** | **periodic ~3.0** |
+| **popover-plain** | **periodic ~3.0** | **periodic ~3.0** (1.40 4.42 7.43 10.42 13.34 16.42 19.23) |
+| **popover-plain --text-field** | **periodic ~3.0** | **periodic ~2.9** |
+| **popover-teardown** (everything deallocated) | **periodic ~3.0** | **periodic ~3.0** |
+| popover-glass --twice | periodic ~3.0 | periodic ~3.0 |
+| popover-teardown --twice (everything deallocated, both times) | periodic ~3.0 | periodic ~3.0 |
+| control-timer | periodic ~3.0 (2.67 5.67 8.67 … 20.67) | periodic ~3.0 |
+| appkit-glass --twice | irregular (4 wakes) | irregular (8 wakes) |
 | appkit-glass --click | quiet | quiet |
-| appkit-glass --activate | quiet | irregular (2 wakes, 1.3 s) |
-| appkit-glass --borderless | quiet | irregular (3 wakes, 2.8 s, 0.5 s) |
-| appkit-glass --below-item | irregular (2 wakes, 2.4 s) | irregular (2 wakes, 8.8 s) |
-| appkit-glass --under-mouse | quiet | quiet |
-| swiftui-glass --borderless --below-item | quiet | quiet |
+| appkit-glass --activate | quiet | quiet |
+| appkit-glass --borderless | quiet | quiet |
+| appkit-glass --below-item | irregular (3 wakes) | irregular (3 wakes) |
 
-Repeats: `appkit-glass --twice` was run two more times and gave 2 wakes 7.5 s
-apart both times (quiet in practice). `popover-teardown --twice` was run two
-more times and showed the same 3 s grid (for example wakes at 3.27, 6.04,
-9.27, 12.27 s): a ~3 s timer with one beat shifted, which the strict detector
-labels irregular. An earlier full run, made while the machine was in use,
-gave the same picture (popover cases periodic ~3.0 s, panel cases quiet or
-irregular), with one popover-glass run labelled irregular because of extra
-wakes.
+The `irregular` results have a few wakes at random times, with no 3 s pattern.
+
+`visual-effect --text-field` run 1 had 9 scattered wakes, and four of them happened to form a 3.7 s chain. Two more runs gave 13 and 4 scattered wakes, again with no 3 s pattern (wake times in run 2: 3.30, 8.94, 18.78, 19.42). This mode is noisier than the others, but it shows no steady timer.
+
+**Long run.** One 60 s trace of `appkit-glass --text-field` gave 21 wakes, 20 of them on the ~3.0 s chain, from the first second of the trace to the last (58.05 s). It did not die out.
+
+### Finding the text field
+
+The ~3 s wakes were first seen in a larger menu bar app. Its borderless glass panel shows sign-in text fields, toggles, glass buttons, a `TimelineView`, symbol images and more. That app was bisected with the same trace method by removing one group of features at a time. Each step was traced twice, with 14 s traces from an earlier version of the script:
+
+| removed, cumulatively | result |
+|------|--------|
+| nothing | periodic ~3.0 s |
+| glass button styles, `TimelineView`, list rows, dividers, action buttons, secondary text styles, trailing modifiers, header and title texts | periodic ~3.0 s at every step |
+| also the toggles; only one `TextField` left | periodic ~3.0 s |
+| also that `TextField` | irregular |
+
+Then the starting point was restored, and only its two text fields were removed. That app was quiet in both runs. The window style, level, collection behaviour, shadow and corner masking, the status item's SwiftUI icon and the global event monitor were all present in that quiet run, so none of them is needed. The trivial panel content in this repository reproduces the wakes once a `TextField` is added.
 
 ## Where the wake comes from
 
-The `syscall` table of a System Trace of `popover-glass` carries backtraces.
-At two of the wakes, 3.0 s apart, the worker threads were running dispatch
-timer sources owned by the GPU stack:
+Some rows of the trace's `syscall` table carry backtraces. Those taken at two consecutive wakes, 3 s apart, point at dispatch timer sources in the GPU stack. This holds for `appkit-glass --text-field` and for `popover-glass`:
 
-- `RB::Device::schedule_collection` → `RB::Device::prune_caches` (RenderBox),
-  releasing Metal buffers and heaps;
-- `AGX::Device::setupDeferred` → `AGX::Device::purgeDevice` (the GPU driver),
-  shrinking a pooled allocator.
+- `RB::Device::schedule_collection` → `RB::Device::prune_caches` (RenderBox), which releases Metal buffers and heaps;
+- `AGX::Device::setupDeferred` → `AGX::Device::purgeDevice` (the GPU driver), which shrinks a pooled allocator.
 
-The other wakes made no syscall with a backtrace, so not every wake could be
-attributed; these two frameworks are the only owners that were seen.
+The later wakes made no syscall with a backtrace, so they could not be attributed. These two owners are the only ones seen. The trigger is not the first render of just any content. A text field without glass, and glass without a text field, both render and stay quiet.
 
 ## Interpretation
 
-In this minimal app, a closed `NSPopover` leaves a ~3 s periodic wakeup of
-two libdispatch workers, whether or not its SwiftUI content uses
-`.glassEffect`, and the wakeup continues after the popover, its controller
-and its view are verifiably deallocated, so it is not caused by the app
-retaining them. The backtraces point at GPU resource cache collection in
-system frameworks, which suggests a system issue tied to the popover's
-rendering (on macOS 27 the popover background itself is a glass material);
-this was not proven, and no other macOS version was tested.
+The behaviour depends on what has been drawn, and nothing the app keeps alive explains it:
 
-What was not reproduced: an `NSPanel` with `NSGlassEffectView` or
-`.glassEffect` content stayed quiet or showed a couple of unrelated wakes in
-every variation tried here (container views, clear style, borderless,
-positioned at the status item or under the cursor, shown through the status
-item button, activated, shown twice). The ~3 s timer seen with such a panel in
-a larger app therefore needs something not present here.
+- Releasing a popover, its controller and its view, all verified with weak references, does not stop the timer.
+- Clearing the first responder before closing does not stop it.
+- Showing the panel without making it key does not stop it.
 
-Workaround observed: the modes that do not use a popover (and so do not keep
-the popover's glass background) stay quiet after closing. Releasing the
-popover does not help.
+The backtraces point at GPU cache-collection timers in system frameworks. This suggests a system issue that involves the glass material: a panel needs glass plus a text field, and a popover triggers it on its own, possibly because its background is drawn with glass. That last point is an assumption and was not verified. The owning framework was only partly identified, and other text controls (`NSTextField`, `TextEditor`, `SecureField` alone) were not tested.
+
+**Observed workaround:** do not combine the glass material with a text field in the panel. For example, use a panel without `NSGlassEffectView` or `.glassEffect`, or keep text fields out of the glass panel. Avoid `NSPopover` for content that is shown once and then stays closed. Tearing views down on close does not help.

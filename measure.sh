@@ -1,9 +1,9 @@
 #!/bin/bash
 # Usage: ./measure.sh <mode> [extra app flags, e.g. --twice --click]
 # Launches ./glass-wakeups --mode <mode> --auto, waits until the panel has
-# been closed plus 5 s, records a 14 s System Trace of the process and
-# prints the wake times, the intervals and a verdict (periodic, quiet or
-# irregular).
+# been closed plus 5 s, records a System Trace of the process (20 s, or
+# TRACE_SECONDS) and prints the wake times, the intervals and a verdict
+# (periodic, quiet or irregular).
 set -euo pipefail
 
 mode="${1:?usage: measure.sh <mode> [flags]}"
@@ -25,7 +25,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-nice -n 15 "$bin" --mode "$mode" --auto "$@" >"$log" 2>&1 &
+"$bin" --mode "$mode" --auto "$@" >"$log" 2>&1 &
 pid=$!
 
 # Wait for the app to report that it is done with the panel (max 60 s).
@@ -39,7 +39,7 @@ sleep 5
 
 trace="$dir/run.trace"
 xcrun xctrace record --template 'System Trace' --attach "$pid" \
-    --time-limit 14s --output "$trace" >/dev/null 2>&1
+    --time-limit "${TRACE_SECONDS:-20}s" --output "$trace" >/dev/null 2>&1
 xcrun xctrace export --input "$trace" \
     --xpath '/trace-toc/run/data/table[@schema="thread-state"]' >"$dir/ts.xml" 2>/dev/null
 
@@ -87,17 +87,28 @@ gaps = [b - a for a, b in zip(times, times[1:])]
 print("running intervals:", len(starts), " wakes:", len(times))
 print("wake times (s):", " ".join(f"{t:.3f}" for t in times) or "-")
 print("intervals  (s):", " ".join(f"{g:.3f}" for g in gaps) or "-")
-# Periodic: some period P (taken from the intervals, >= 0.5 s) such that at
-# least 3 wakes are followed by another wake P later (within 3%). Unrelated
-# extra wakes in between do not hide a periodic timer this way.
-def links(p):
-    tol = max(0.05, 0.03 * p)
-    return sum(any(abs(u - t - p) <= tol for u in times) for t in times)
+# Periodic: a chain of at least 4 wakes, each 0.85-1.15 P after the previous
+# one, for some P taken from the intervals (>= 1 s). Unrelated extra wakes in
+# between do not break the chain, and the timer's own leeway (beats a few
+# hundred ms early or late) is tolerated.
+def chain(p):
+    best = []
+    for start in times:
+        c = [start]
+        while True:
+            nxt = [u for u in times if 0.85 * p <= u - c[-1] <= 1.15 * p]
+            if not nxt:
+                break
+            c.append(min(nxt, key=lambda u: abs(u - c[-1] - p)))
+        best = max(best, c, key=len)
+    return best
 
-best = max((g for g in gaps if g >= 0.5), key=links, default=None)
-if best is not None and links(best) >= 3:
-    print(f"verdict: periodic ~{best:.1f}s ({links(best) + 1} of {len(times)} wakes)")
-elif len(times) <= 1:
+c = max((chain(g) for g in gaps if g >= 1.0), key=len, default=[])
+if len(c) >= 4:
+    steps = sorted(b - a for a, b in zip(c, c[1:]))
+    print(f"verdict: periodic ~{steps[len(steps) // 2]:.1f}s ({len(c)} of {len(times)} wakes)")
+# Attaching and stopping the trace each wake the process once.
+elif len(times) <= 2:
     print("verdict: quiet")
 else:
     print(f"verdict: irregular ({len(times)} wakes)")

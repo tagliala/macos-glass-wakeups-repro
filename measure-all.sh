@@ -8,11 +8,14 @@ runs="${1:-2}"
 cases=(
     "never-open" "no-content" "plain" "appkit-glass" "swiftui-glass"
     "appkit-glass-clear" "appkit-glass-container" "swiftui-glass-container"
-    "popover-glass" "popover-plain" "popover-teardown" "visual-effect" "control-timer"
+    "visual-effect" "control-timer"
+    "plain --text-field" "visual-effect --text-field"
+    "appkit-glass --text-field" "swiftui-glass --text-field"
+    "appkit-glass --text-field --resign" "appkit-glass --text-field --orderfront"
+    "popover-glass" "popover-plain" "popover-plain --text-field" "popover-teardown"
     "popover-glass --twice" "popover-teardown --twice"
     "appkit-glass --twice" "appkit-glass --click" "appkit-glass --activate"
     "appkit-glass --borderless" "appkit-glass --below-item"
-    "appkit-glass --under-mouse" "swiftui-glass --borderless --below-item"
 )
 
 rows=()
