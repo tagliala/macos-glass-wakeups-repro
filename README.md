@@ -137,6 +137,7 @@ The behaviour depends on what has been drawn, and nothing the app keeps alive ex
 - Releasing a popover, its controller and its view, all verified with weak references, does not stop the timer.
 - Clearing the first responder before closing does not stop it.
 - Showing the panel without making it key does not stop it.
+- The text field does not need automatic keyboard focus. In the larger app, the field was kept but nothing gave it focus (no `@FocusState` assignment); the wakes stayed periodic in both runs. In the repro, `--orderfront` never makes the panel key, so no field has focus, and the wakes remain.
 
 The backtraces point at GPU cache-collection timers in system frameworks. This suggests a system issue that involves the glass material: a panel needs glass plus a text field, and a popover triggers it on its own, possibly because its background is drawn with glass. That last point is an assumption and was not verified. The owning framework was only partly identified, and other text controls (`NSTextField`, `TextEditor`, `SecureField` alone) were not tested.
 
